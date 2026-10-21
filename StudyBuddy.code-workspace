@@ -1,0 +1,11 @@
+{
+  "folders": [
+    { "name": "StudyBuddy", "path": "." }
+  ],
+  "settings": {
+    "python.defaultInterpreterPath": "${workspaceFolder}/.venv"
+  },
+  "extensions": {
+    "recommendations": ["ms-python.python"]
+  }
+}
