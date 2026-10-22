@@ -1,35 +1,60 @@
-"""Diagnose Gemini access without generating text or revealing credentials.
+"""Diagnose Gemini access without revealing credentials or saved conversations.
 
 Run with the project's virtual environment: python check_online.py.
-The only network operation is a verified HTTPS GET of Gemini's model list.
+By default, only the model list is requested. --chat sends one short test prompt
+using the configured model; this can consume API quota.
 """
 
+import argparse
 import re
 from urllib.parse import urlsplit
 
 import requests
 
-from backend.ai_service import BearerAuth
+from backend.ai_service import AIService, BearerAuth
 from config import AppConfig, ConfigurationError
 
 GEMINI_ROOT = "https://generativelanguage.googleapis.com/v1beta/openai"
+CHAT_PROMPT = "Reply with exactly: StudyBuddy is online."
+ERROR_STATUSES = frozenset({
+    "INVALID_ARGUMENT", "FAILED_PRECONDITION", "OUT_OF_RANGE", "NOT_FOUND",
+    "ALREADY_EXISTS", "PERMISSION_DENIED", "UNAUTHENTICATED", "RESOURCE_EXHAUSTED",
+    "CANCELLED", "DATA_LOSS", "UNKNOWN", "INTERNAL", "UNAVAILABLE",
+    "DEADLINE_EXCEEDED", "UNIMPLEMENTED", "ABORTED",
+})
+ERROR_REASONS = {
+    "API_KEY_INVALID": "The API key is invalid. Create a replacement in Google AI Studio.",
+    "API_KEY_EXPIRED": "The API key has expired. Create a replacement in Google AI Studio.",
+    "API_KEY_SERVICE_BLOCKED": "The key's API restrictions block this service. Check its Gemini API access.",
+    "API_KEY_HTTP_REFERRER_BLOCKED": "The key's website restrictions block this desktop request. Check its application restrictions.",
+    "API_KEY_IP_ADDRESS_BLOCKED": "The key's IP restrictions block this connection. Check its application restrictions.",
+    "SERVICE_DISABLED": "The Gemini API is disabled for this Google project. Check the project's API settings.",
+    "BILLING_DISABLED": "Google requires billing for this request. Review the project's billing settings and pricing.",
+    "CONSUMER_INVALID": "Google rejected the associated project. Check the key's project in AI Studio.",
+}
 
 
-def check_connection(config: AppConfig, report=print) -> int:
-    """Return zero for successful model access; a chat reply is still untested."""
+def valid_gemini_config(config: AppConfig, report) -> bool:
     try:
         config.validate()
     except ConfigurationError as error:
         report(str(error))
-        return 1
+        return False
     if config.mode != "online":
         report("Online mode is not selected. Set AI_MODE=online and run this check again.")
-        return 1
+        return False
     url = urlsplit(config.base_url)
     if (url.hostname != "generativelanguage.googleapis.com"
             or url.port not in (None, 443)
             or url.path.rstrip("/") != "/v1beta/openai"):
         report(f"For Gemini, set AI_BASE_URL={GEMINI_ROOT}")
+        return False
+    return True
+
+
+def check_connection(config: AppConfig, report=print) -> int:
+    """Return zero for successful model access; a chat reply is still untested."""
+    if not valid_gemini_config(config, report):
         return 1
 
     report("Checking Gemini model access. No chat-generation request is sent.")
@@ -113,7 +138,118 @@ def check_connection(config: AppConfig, report=print) -> int:
     return 0 if available else 1
 
 
-def main() -> int:
+def report_chat_error(response, report) -> None:
+    """Map provider errors to fixed text; never echo arbitrary response fields."""
+    status = response.status_code
+    explanations = {
+        400: "Google rejected the test request. Check the safe error details below.",
+        401: "Authentication was rejected. Check that your AI Studio key is active.",
+        403: "Chat access was rejected. Check the key's restrictions and project permissions.",
+        404: "The chat endpoint or selected model was not found. Check AI_MODEL and the API root.",
+        408: "Google reported a timeout. Wait before trying again.",
+        429: "A rate or quota limit was reached. Check the project's limits in AI Studio.",
+        504: "Google reported a timeout. Wait before trying again.",
+    }
+    if 300 <= status < 400:
+        report("A redirect was refused. Check the API root and any network sign-in page.")
+        return
+    report(explanations.get(status, "Google did not accept the chat request."))
+    try:
+        data = response.json()
+    except ValueError:
+        report("No structured error details were returned. The response body was not printed.")
+        return
+    # Some Google endpoints wrap their error object in a list.
+    entries = data if isinstance(data, list) else [data]
+    for entry in entries:
+        error = entry.get("error") if isinstance(entry, dict) else None
+        if not isinstance(error, dict):
+            continue
+        error_status = error.get("status")
+        if isinstance(error_status, str) and error_status in ERROR_STATUSES:
+            report("Google error status: " + error_status)
+        details = error.get("details", [])
+        if isinstance(details, list):
+            for detail in details:
+                reason = detail.get("reason") if isinstance(detail, dict) else None
+                if isinstance(reason, str) and reason in ERROR_REASONS:
+                    report("Google error reason: " + reason)
+                    report(ERROR_REASONS[reason])
+        message = error.get("message")
+        if not isinstance(message, str):
+            continue
+        message = message.lower()
+        # Inspect messages only to select a fixed explanation. Keys, project IDs,
+        # URLs, and arbitrary provider text must never appear in diagnostic output.
+        if any(phrase in message for phrase in ("api key not valid", "invalid api key", "api key expired", "api key was reported as leaked")):
+            report("Google rejected the API key. Create a replacement in Google AI Studio and update your private .env.")
+        if "api keys are not supported" in message:
+            report("Google says this request requires a different authentication method. Check the API endpoint and key type.")
+        if "location is not supported" in message or "unsupported region" in message:
+            report("Google reports that this service is unavailable in your current region. Check Gemini's supported regions.")
+        if any(phrase in message for phrase in ("enable billing", "billing is required", "free tier is not available")):
+            report("Google requires billing for this request. Review the project's billing settings and pricing before enabling it.")
+        if "model" in message and any(phrase in message for phrase in ("not found", "not supported", "not available")):
+            report("Google reports that the selected model is missing or unsupported for this request. Model listing alone does not establish chat support.")
+        if "alternate" in message and ("role" in message or "user" in message):
+            report("Google rejected the conversation's role ordering.")
+    report("Raw provider error text was not printed.")
+
+
+def check_chat(config: AppConfig, report=print) -> int:
+    """Send one synthetic message with the same payload shape as a new app chat."""
+    if not valid_gemini_config(config, report):
+        return 1
+    report("Sending one short Gemini test message. This can use API quota.")
+    report("No saved conversations are read or sent.")
+    try:
+        with requests.Session() as session:
+            session.auth = BearerAuth(config.api_key)
+            with session.post(
+                config.endpoint,
+                json={"model": config.model, "messages": AIService.build_context([
+                    {"role": "user", "content": CHAT_PROMPT},
+                ])},
+                timeout=(10, config.timeout_seconds), verify=True, allow_redirects=False,
+            ) as response:
+                report(f"HTTP status: {response.status_code}")
+                if not 200 <= response.status_code < 300:
+                    report_chat_error(response, report)
+                    return 1
+                try:
+                    content = response.json()["choices"][0]["message"]["content"]
+                    if not isinstance(content, str) or not content.strip():
+                        raise ValueError
+                except (ValueError, KeyError, IndexError, TypeError):
+                    report("The chat response contained no usable text. Its body was not printed.")
+                    return 1
+    except requests.ConnectTimeout:
+        report("Connection timed out before reaching Gemini. Check your network or proxy.")
+        return 1
+    except requests.ReadTimeout:
+        report("Waiting for the chat reply timed out. No automatic retry was sent.")
+        return 1
+    except requests.exceptions.SSLError:
+        report("TLS certificate verification failed. Check your clock and certificate setup; keep verification enabled.")
+        return 1
+    except requests.exceptions.ProxyError:
+        report("The configured network proxy could not reach Gemini. Check your proxy settings.")
+        return 1
+    except requests.Timeout:
+        report("The chat request timed out. No automatic retry was sent.")
+        return 1
+    except requests.RequestException:
+        report("The chat request could not reach Gemini. Check DNS, network access, and the API root.")
+        return 1
+    report("Chat generation succeeded: a nonempty text reply was received.")
+    report("Open StudyBuddy, choose New Chat, and try a fresh question with these settings.")
+    return 0
+
+
+def main(argv=None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--chat", action="store_true", help="send one short test message (can consume API quota)")
+    args = parser.parse_args(argv)
     try:
         config = AppConfig.load()
     except ConfigurationError as error:
@@ -122,7 +258,7 @@ def main() -> int:
     except (OSError, UnicodeError):
         print("Could not read .env. Check its permissions and save it with UTF-8 encoding.")
         return 1
-    return check_connection(config)
+    return check_chat(config) if args.chat else check_connection(config)
 
 
 if __name__ == "__main__":

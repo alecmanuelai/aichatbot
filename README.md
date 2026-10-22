@@ -110,7 +110,7 @@ From the project root on Windows:
 ```
 
 On Linux, replace `.venv\Scripts\python.exe` with `.venv/bin/python`.
-The first command runs 32 backend/configuration/diagnostic tests without a display.
+The first command runs 41 backend/configuration/diagnostic tests without a display.
 The second opens real windows and runs three GUI scenarios; it needs a display.
 All tests use temporary databases. HTTP responses are mocked; tests never need
 credentials or make paid requests. See [validation results](docs/VALIDATION.md).
@@ -133,7 +133,7 @@ Manual Windows checks before presenting:
 | --- | --- |
 | `main.py` | Connect the services, start the window, and handle startup errors |
 | `config.py` | Load and validate `.env`; define the project path and message limit |
-| `check_online.py` | Check Gemini connectivity and available models without generating a chat reply |
+| `check_online.py` | Check Gemini connectivity and models; optionally test one chat reply |
 | `ui/main_window.py` | Coordinate events, worker threads, retries, and queue polling |
 | `ui/chat_panel.py` | Render bubbles, timestamps, input, mode, and status |
 | `ui/sidebar.py` | Render chat navigation and new/delete controls |
@@ -164,9 +164,21 @@ from the project folder in PowerShell:
 This reads your existing `.env`, uses verified HTTPS and the same bearer
 authentication as the app, and requests only Gemini's model list. It reports
 connection/read timeouts, access errors, and model availability without printing
-your key or raw response bodies. It never sends a chat-generation request.
+your key or raw response bodies. By default it sends no chat-generation request.
 A successful model listing does not establish chat quota or a successful answer.
 Model names should come from the models available to your Google project.
+
+If model listing succeeds but chat fails, explicitly test generation:
+
+```powershell
+.\.venv\Scripts\python.exe .\check_online.py --chat
+```
+
+This sends one short test message using your configured model and can consume API
+quota. It uses the same payload format as a new StudyBuddy chat and does not read
+or send saved conversations. It reports the HTTP status and recognized error
+categories using fixed explanations; raw error text and generated replies are
+not printed. A successful test confirms one chat reply with the current settings.
 
 | Symptom | What to do |
 | --- | --- |
