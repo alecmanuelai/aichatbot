@@ -110,7 +110,7 @@ From the project root on Windows:
 ```
 
 On Linux, replace `.venv\Scripts\python.exe` with `.venv/bin/python`.
-The first command runs 41 backend/configuration/diagnostic tests without a display.
+The first command runs 46 backend/configuration/diagnostic tests without a display.
 The second opens real windows and runs three GUI scenarios; it needs a display.
 All tests use temporary databases. HTTP responses are mocked; tests never need
 credentials or make paid requests. See [validation results](docs/VALIDATION.md).
@@ -179,6 +179,22 @@ quota. It uses the same payload format as a new StudyBuddy chat and does not rea
 or send saved conversations. It reports the HTTP status and recognized error
 categories using fixed explanations; raw error text and generated replies are
 not printed. A successful test confirms one chat reply with the current settings.
+
+If AI Studio's playground replies but the compatibility API check fails, test
+the native Gemini API with the same private key and model:
+
+```powershell
+.\.venv\Scripts\python.exe .\check_online.py --native-chat
+```
+
+This sends one short message to Google's `generateContent` endpoint, with the API
+key in the `x-goog-api-key` header. It uses verified HTTPS, refuses redirects,
+and neither retries nor falls back automatically. It can consume API quota.
+Keep your existing Gemini compatibility API root in `.env`; the native diagnostic
+validates that configuration before using Google's fixed native endpoint.
+The test does not change your configuration or the desktop app's integration.
+Success confirms one native API reply; success in the browser alone does not
+establish API access, quota, or availability for your key's project.
 
 | Symptom | What to do |
 | --- | --- |

@@ -1,10 +1,12 @@
+from dataclasses import replace
+import io
 import unittest
 from unittest.mock import MagicMock, patch
 
 import requests
 
-from backend.ai_service import AIService
-from check_online import CHAT_PROMPT, GEMINI_ROOT, check_chat, check_connection, main
+from backend.ai_service import AIService, SYSTEM_INSTRUCTION
+from check_online import CHAT_PROMPT, GEMINI_NATIVE_ROOT, GEMINI_ROOT, check_chat, check_connection, main
 from config import AppConfig
 
 
@@ -146,6 +148,84 @@ class ChatCheckTests(unittest.TestCase):
             chat_check.assert_not_called()
             self.assertEqual(main(["--chat"]), 1)
             chat_check.assert_called_once_with(self.config)
+            chat_check.reset_mock()
+            self.assertEqual(main(["--native-chat"]), 1)
+            chat_check.assert_called_once_with(self.config, native=True)
+        self.factory.assert_not_called()
+
+    def test_conflicting_chat_flags_do_not_send_two_requests(self):
+        with patch("check_online.AppConfig.load") as config_load, patch("sys.stderr", new_callable=io.StringIO):
+            with self.assertRaises(SystemExit) as error:
+                main(["--chat", "--native-chat"])
+            self.assertEqual(error.exception.code, 2)
+            config_load.assert_not_called()
+        self.factory.assert_not_called()
+
+    def test_native_request_uses_header_key_and_generate_content_schema(self):
+        self.response.json.return_value = {"candidates": [{"content": {"parts": [
+            {"thought": True, "text": "private reasoning"},
+            {"text": "StudyBuddy is online."},
+        ]}}]}
+        config = replace(self.config, model="models/gemini-example-flash")
+        self.assertEqual(check_chat(config, self.output.append, native=True), 0)
+        endpoint = GEMINI_NATIVE_ROOT + "/models/gemini-example-flash:generateContent"
+        self.session.post.assert_called_once_with(
+            endpoint,
+            json={
+                "systemInstruction": {"parts": [{"text": SYSTEM_INSTRUCTION}]},
+                "contents": [{"role": "user", "parts": [{"text": CHAT_PROMPT}]}],
+            },
+            timeout=(10, 120), verify=True, allow_redirects=False,
+        )
+        self.session.get.assert_not_called()
+        prepared = requests.Request("POST", endpoint, headers={"Authorization": "Basic obsolete"}).prepare()
+        self.session.auth(prepared)
+        self.assertEqual(prepared.headers["x-goog-api-key"], self.config.api_key)
+        self.assertNotIn("Authorization", prepared.headers)
+        self.assertNotIn(self.config.api_key, prepared.url)
+        text = "\n".join(self.output)
+        self.assertIn("Native Gemini chat generation succeeded", text)
+        self.assertIn("still uses the compatibility endpoint", text)
+        self.assertNotIn("private reasoning", text)
+        self.assertNotIn(self.config.api_key, text)
+
+    def test_native_response_requires_answer_text(self):
+        cases = [None, {}, {"candidates": []},
+                 {"candidates": [{"content": {"parts": None}}]},
+                 {"candidates": [{"content": {"parts": []}}]},
+                 {"candidates": [{"content": {"parts": [{"text": " "}]}}]},
+                 {"candidates": [{"content": {"parts": [{"text": "private-test-key", "thought": True}]}}]},
+                 {"candidates": [{"content": {"parts": [None, {"text": 4}, {"functionCall": {}}]}}]}]
+        for payload in cases:
+            with self.subTest(payload=payload):
+                self.output.clear()
+                self.response.json.return_value = payload
+                self.assertEqual(check_chat(self.config, self.output.append, native=True), 1)
+                text = "\n".join(self.output)
+                self.assertIn("no usable text", text)
+                self.assertNotIn(self.config.api_key, text)
+
+    def test_native_errors_are_safe_without_fallback_requests(self):
+        for status, google_status in ((400, "INVALID_ARGUMENT"), (403, "PERMISSION_DENIED"),
+                                      (404, "NOT_FOUND"), (429, "RESOURCE_EXHAUSTED"),
+                                      (503, "UNAVAILABLE"), (302, "UNKNOWN")):
+            with self.subTest(status=status):
+                self.session.post.reset_mock()
+                self.output.clear()
+                self.response.status_code = status
+                self.response.json.return_value = {"error": {"status": google_status, "message": "private-test-key"}}
+                self.assertEqual(check_chat(self.config, self.output.append, native=True), 1)
+                self.session.post.assert_called_once()
+                text = "\n".join(self.output)
+                self.assertIn(f"HTTP status: {status}", text)
+                self.assertNotIn(self.config.api_key, text)
+                self.assertNotIn("succeeded", text)
+        self.session.get.assert_not_called()
+
+    def test_native_invalid_model_ids_are_not_used_in_urls(self):
+        for model in ("other-model", "gemini-x/../../models/other", "gemini-x?key=secret", "gemini-x\n", "models/"):
+            with self.subTest(model=model):
+                self.assertEqual(check_chat(replace(self.config, model=model), self.output.append, native=True), 1)
         self.factory.assert_not_called()
 
     def test_error_details_are_classified_without_printing_private_fields(self):
@@ -194,7 +274,7 @@ class ChatCheckTests(unittest.TestCase):
         self.assertNotIn("private-test-key", "\n".join(self.output))
 
     def test_http_rejections_are_not_reported_as_success(self):
-        for status in (302, 400, 401, 403, 404, 408, 429, 500, 504):
+        for status in (302, 400, 401, 403, 404, 408, 429, 500, 503, 504):
             with self.subTest(status=status):
                 self.output.clear()
                 self.response.status_code = status
@@ -215,17 +295,19 @@ class ChatCheckTests(unittest.TestCase):
     def test_transport_errors_are_safe_and_not_retried(self):
         errors = [requests.ConnectTimeout, requests.ReadTimeout, requests.Timeout,
                   requests.exceptions.SSLError, requests.exceptions.ProxyError, requests.ConnectionError]
-        for error in errors:
-            with self.subTest(error=error.__name__):
-                self.session.post.reset_mock()
-                self.output.clear()
-                self.session.post.side_effect = error("private-test-key")
-                self.assertEqual(self.run_check(), 1)
-                self.session.post.assert_called_once()
-                self.assertNotIn("private-test-key", "\n".join(self.output))
+        for native in (False, True):
+            for error in errors:
+                with self.subTest(error=error.__name__, native=native):
+                    self.session.post.reset_mock()
+                    self.output.clear()
+                    self.session.post.side_effect = error("private-test-key")
+                    self.assertEqual(check_chat(self.config, self.output.append, native=native), 1)
+                    self.session.post.assert_called_once()
+                    self.assertNotIn("private-test-key", "\n".join(self.output))
 
     def test_invalid_config_never_sends_a_chat_request(self):
         for config in (AppConfig(), AppConfig(mode="online"),
                        AppConfig("online", "https://example.com/v1beta/openai", "test-key", "model")):
             self.assertEqual(self.run_check(config), 1)
+            self.assertEqual(check_chat(config, self.output.append, native=True), 1)
         self.factory.assert_not_called()

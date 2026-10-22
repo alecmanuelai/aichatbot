@@ -1,8 +1,8 @@
 """Diagnose Gemini access without revealing credentials or saved conversations.
 
 Run with the project's virtual environment: python check_online.py.
-By default, only the model list is requested. --chat sends one short test prompt
-using the configured model; this can consume API quota.
+By default, only the model list is requested. --chat or --native-chat sends one
+short test prompt using the configured model; this can consume API quota.
 """
 
 import argparse
@@ -15,6 +15,7 @@ from backend.ai_service import AIService, BearerAuth
 from config import AppConfig, ConfigurationError
 
 GEMINI_ROOT = "https://generativelanguage.googleapis.com/v1beta/openai"
+GEMINI_NATIVE_ROOT = "https://generativelanguage.googleapis.com/v1beta"
 CHAT_PROMPT = "Reply with exactly: StudyBuddy is online."
 ERROR_STATUSES = frozenset({
     "INVALID_ARGUMENT", "FAILED_PRECONDITION", "OUT_OF_RANGE", "NOT_FOUND",
@@ -32,6 +33,18 @@ ERROR_REASONS = {
     "BILLING_DISABLED": "Google requires billing for this request. Review the project's billing settings and pricing.",
     "CONSUMER_INVALID": "Google rejected the associated project. Check the key's project in AI Studio.",
 }
+
+
+class GeminiKeyAuth(requests.auth.AuthBase):
+    """Send a Gemini API key in a header, without netrc or URL credentials."""
+
+    def __init__(self, api_key: str):
+        self._api_key = api_key
+
+    def __call__(self, request):
+        request.headers.pop("Authorization", None)
+        request.headers["x-goog-api-key"] = self._api_key
+        return request
 
 
 def valid_gemini_config(config: AppConfig, report) -> bool:
@@ -148,6 +161,7 @@ def report_chat_error(response, report) -> None:
         404: "The chat endpoint or selected model was not found. Check AI_MODEL and the API root.",
         408: "Google reported a timeout. Wait before trying again.",
         429: "A rate or quota limit was reached. Check the project's limits in AI Studio.",
+        503: "Gemini reported that this request's service or model is temporarily unavailable.",
         504: "Google reported a timeout. Wait before trying again.",
     }
     if 300 <= status < 400:
@@ -196,20 +210,35 @@ def report_chat_error(response, report) -> None:
     report("Raw provider error text was not printed.")
 
 
-def check_chat(config: AppConfig, report=print) -> int:
-    """Send one synthetic message with the same payload shape as a new app chat."""
+def check_chat(config: AppConfig, report=print, *, native=False) -> int:
+    """Send one synthetic message through the selected Gemini API endpoint."""
     if not valid_gemini_config(config, report):
         return 1
+    context = AIService.build_context([{"role": "user", "content": CHAT_PROMPT}])
+    if native:
+        model = config.model.removeprefix("models/")
+        if not re.fullmatch(r"gemini-[a-zA-Z0-9._-]{1,80}", model):
+            report("The native test requires a Gemini model ID, such as gemini-3.8-flash.")
+            return 1
+        endpoint = f"{GEMINI_NATIVE_ROOT}/models/{model}:generateContent"
+        payload = {
+            "systemInstruction": {"parts": [{"text": context[0]["content"]}]},
+            "contents": [{"role": "user", "parts": [{"text": CHAT_PROMPT}]}],
+        }
+        auth = GeminiKeyAuth(config.api_key)
+        report("API test: native Gemini generateContent (one request, no automatic fallback).")
+    else:
+        endpoint = config.endpoint
+        payload = {"model": config.model, "messages": context}
+        auth = BearerAuth(config.api_key)
+        report("API test: Gemini OpenAI-compatible chat completions.")
     report("Sending one short Gemini test message. This can use API quota.")
     report("No saved conversations are read or sent.")
     try:
         with requests.Session() as session:
-            session.auth = BearerAuth(config.api_key)
+            session.auth = auth
             with session.post(
-                config.endpoint,
-                json={"model": config.model, "messages": AIService.build_context([
-                    {"role": "user", "content": CHAT_PROMPT},
-                ])},
+                endpoint, json=payload,
                 timeout=(10, config.timeout_seconds), verify=True, allow_redirects=False,
             ) as response:
                 report(f"HTTP status: {response.status_code}")
@@ -217,7 +246,18 @@ def check_chat(config: AppConfig, report=print) -> int:
                     report_chat_error(response, report)
                     return 1
                 try:
-                    content = response.json()["choices"][0]["message"]["content"]
+                    data = response.json()
+                    if native:
+                        parts = data["candidates"][0]["content"]["parts"]
+                        if not isinstance(parts, list):
+                            raise ValueError
+                        content = "".join(
+                            part["text"] for part in parts
+                            if isinstance(part, dict) and not part.get("thought")
+                            and isinstance(part.get("text"), str)
+                        )
+                    else:
+                        content = data["choices"][0]["message"]["content"]
                     if not isinstance(content, str) or not content.strip():
                         raise ValueError
                 except (ValueError, KeyError, IndexError, TypeError):
@@ -241,14 +281,20 @@ def check_chat(config: AppConfig, report=print) -> int:
     except requests.RequestException:
         report("The chat request could not reach Gemini. Check DNS, network access, and the API root.")
         return 1
-    report("Chat generation succeeded: a nonempty text reply was received.")
-    report("Open StudyBuddy, choose New Chat, and try a fresh question with these settings.")
+    if native:
+        report("Native Gemini chat generation succeeded: a nonempty text reply was received.")
+        report("This confirms one API reply using your local key. StudyBuddy still uses the compatibility endpoint until its integration is updated.")
+    else:
+        report("Chat generation succeeded: a nonempty text reply was received.")
+        report("Open StudyBuddy, choose New Chat, and try a fresh question with these settings.")
     return 0
 
 
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--chat", action="store_true", help="send one short test message (can consume API quota)")
+    chat_mode = parser.add_mutually_exclusive_group()
+    chat_mode.add_argument("--chat", action="store_true", help="send one short compatibility API test message (can consume API quota)")
+    chat_mode.add_argument("--native-chat", action="store_true", help="send one short native Gemini API test message (can consume API quota)")
     args = parser.parse_args(argv)
     try:
         config = AppConfig.load()
@@ -258,6 +304,8 @@ def main(argv=None) -> int:
     except (OSError, UnicodeError):
         print("Could not read .env. Check its permissions and save it with UTF-8 encoding.")
         return 1
+    if args.native_chat:
+        return check_chat(config, native=True)
     return check_chat(config) if args.chat else check_connection(config)
 
 
