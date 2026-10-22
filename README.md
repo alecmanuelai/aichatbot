@@ -87,6 +87,25 @@ For example, `https://api.example.com/v1/` becomes
 `https://api.example.com/v1/chat/completions`. Include `/v1` if your provider
 requires it; do not include `/chat/completions` in the base URL.
 
+For Gemini, use [`.env.gemini.example`](.env.gemini.example) as a template:
+
+```dotenv
+AI_MODE=online
+AI_BASE_URL=https://generativelanguage.googleapis.com/v1beta/openai
+AI_API_KEY=replace_with_your_private_gemini_key
+AI_MODEL=gemini-3.5-flash-lite
+AI_TIMEOUT_SECONDS=120
+```
+
+Use a Gemini API key from your [Google AI Studio project](https://aistudio.google.com/api-keys).
+For free-tier usage, use a project on the free tier and check its model access
+and quota. `gemini-3.5-flash-lite` is a model option in Google's compatibility
+cookbook; its inclusion there or in a model list does not establish generation
+access or free quota for your project. Replace the old provider's key, API root,
+and model together in `.env`, save, then launch `Start-StudyBuddy.cmd` and choose
+**New Chat**. The launcher reads the saved configuration without old terminal
+overrides. These settings do not change your Google billing tier.
+
 For OpenAI, use [`.env.openai.example`](.env.openai.example) as a template:
 
 ```dotenv
