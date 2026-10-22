@@ -1,5 +1,36 @@
 # Validation record
 
+## UI refresh — 22 October 2026
+
+Validated with Linux Python 3.12.14, Tk 9.0.4, and CustomTkinter 5.2.2:
+
+- All 46 backend/configuration/diagnostic tests passed.
+- All five real-window GUI scenarios passed with temporary databases and no
+  live provider calls. Existing send, retry, history, delete, and shutdown
+  scenarios remain covered.
+- New GUI checks cover starter prompts filling drafts without sending, the
+  character limit, full-reply clipboard copying, keyboard-driven conversation
+  search, and clearing a search when starting a chat.
+- Long paragraphs and unbroken identifiers were checked at 860×580 and
+  1100×760 logical window sizes, at 100%, 125%, and 150% display scaling.
+  Tests verify actual window dimensions, text bounds, the reachable final line,
+  composer/footer bounds, and hidden status controls across DPI changes.
+- Inspected welcome, conversation, and smaller-window screenshots on Xorg.
+  The committed preview contains sample messages, not a live model response.
+
+Two clipping causes were fixed: physical pixel widths were being scaled again
+when used as label wrap lengths, and a resize binding was replacing the
+scrollable frame's own scroll-region handler. Hidden status controls now stay
+hidden when DPI changes. The restricted Xorg environment uses Arial aliases
+and fallback shape drawing; Windows uses Segoe UI and still needs a local
+visual check of this refreshed version.
+
+The user supplied screenshots of successful Gemini replies before this UI
+refresh. This update changes only presentation and navigation, and adds no
+dependencies or changes to provider settings, credentials, or stored history.
+
+## Original application — 21 October 2026
+
 The completed application was validated in the cloud workspace on 21 October
 2026. Runtime: Linux, Python 3.12.14, Tk 9.0.4, CustomTkinter 5.2.2, SQLite 3.53.1.
 

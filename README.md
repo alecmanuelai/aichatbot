@@ -51,6 +51,12 @@ for the desktop window; the backend tests can run without one.
 
 ## Using the app
 
+- The refreshed dark interface uses mint accents, readable message cards, and
+  wrapping that respects display scaling. Long replies remain fully scrollable.
+- Starter cards fill an editable draft; they never send a request automatically.
+- Search the sidebar to find a saved conversation, and use **Copy** on a reply
+  to copy its complete text. The composer counts characters and disables Send
+  for empty or oversized drafts.
 - Ask a question and press Enter or click Send. Shift+Enter inserts a newline.
 - Messages are limited to **4,000 characters after trimming surrounding whitespace**.
 - The sidebar restores saved conversations. New Chat starts another; Delete Chat
@@ -62,6 +68,10 @@ for the desktop window; the backend tests can run without one.
 - An unanswered question remains retryable after restarting. A successful reply
   may already be saved if it finished just before you closed the window.
 - Timestamps are stored in UTC and displayed in your computer's local timezone.
+
+![StudyBuddy desktop interface](docs/ui-preview.png)
+
+Preview uses sample messages; no provider request was made for this image.
 
 History lives in `data/studybuddy.db`, relative to the project, regardless of the
 terminal's working directory. The database is local plaintext; keep private study
@@ -154,7 +164,7 @@ From the project root on Windows:
 
 On Linux, replace `.venv\Scripts\python.exe` with `.venv/bin/python`.
 The first command runs 46 backend/configuration/diagnostic tests without a display.
-The second opens real windows and runs three GUI scenarios; it needs a display.
+The second opens real windows and runs five GUI scenarios; it needs a display.
 All tests use temporary databases. HTTP responses are mocked; tests never need
 credentials or make paid requests. See [validation results](docs/VALIDATION.md).
 
@@ -180,6 +190,7 @@ Manual Windows checks before presenting:
 | `ui/main_window.py` | Coordinate events, worker threads, retries, and queue polling |
 | `ui/chat_panel.py` | Render bubbles, timestamps, input, mode, and status |
 | `ui/sidebar.py` | Render chat navigation and new/delete controls |
+| `ui/theme.py` | Shared colors and desktop fonts |
 | `backend/chatbot_service.py` | Validate/save a question and attach its reply safely |
 | `backend/ai_service.py` | Labeled offline responses and verified HTTPS requests |
 | `backend/conversation_service.py` | Simple interface for conversation operations |
