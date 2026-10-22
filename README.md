@@ -27,6 +27,11 @@ py -m venv .venv
 Close the Tk test window before continuing. These commands require no virtual
 environment activation, so PowerShell's activation-script policy is irrelevant.
 In VS Code, select `.venv\Scripts\python.exe` using **Python: Select Interpreter**.
+After setup, you can also double-click `Start-StudyBuddy.cmd` in the project
+folder. It reads your private `.env` afresh, clearing old `AI_*` overrides only
+inside its own process. It prefers `.venv-repair` in the project, then the repaired
+environment in your Windows user folder, then the project's original `.venv`.
+When using a repaired environment, select that interpreter in VS Code as well.
 Keep your existing Python installation. Python 3.12 or newer is recommended.
 The current build was tested on Linux Python 3.12.14 and Tk 9.0.4. The supplied
 earlier session reports a basic CustomTkinter check on Windows Python 3.14.7;
@@ -81,6 +86,25 @@ and model. `AI_BASE_URL.rstrip("/") + "/chat/completions"` constructs the endpoi
 For example, `https://api.example.com/v1/` becomes
 `https://api.example.com/v1/chat/completions`. Include `/v1` if your provider
 requires it; do not include `/chat/completions` in the base URL.
+
+For OpenAI, use [`.env.openai.example`](.env.openai.example) as a template:
+
+```dotenv
+AI_MODE=online
+AI_BASE_URL=https://api.openai.com/v1
+AI_API_KEY=replace_with_your_new_openai_key
+AI_MODEL=gpt-4.1-mini
+AI_TIMEOUT_SECONDS=120
+```
+
+Create a key in your own [OpenAI API project](https://platform.openai.com/api-keys)
+and replace the placeholder privately in `.env`. Replace existing settings
+instead of appending duplicate names. API usage is billed separately from a
+ChatGPT subscription, and a key alone does not establish credit or model access.
+`gpt-4.1-mini` is listed in OpenAI's SDK chat-model definitions; availability for
+your project still requires a real request to verify.
+Launch `Start-StudyBuddy.cmd`, choose **New Chat**, and send a short test question.
+The `check_online.py` diagnostics below are specifically for Gemini.
 
 HTTPS is required. Certificate verification stays enabled, and redirects are
 rejected. Existing HTTPS proxy and certificate-bundle settings are honored;

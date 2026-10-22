@@ -1,5 +1,6 @@
 .env
 .venv/
+.venv-repair/
 __pycache__/
 *.py[cod]
 *.db
