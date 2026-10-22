@@ -110,7 +110,7 @@ From the project root on Windows:
 ```
 
 On Linux, replace `.venv\Scripts\python.exe` with `.venv/bin/python`.
-The first command runs 25 backend/configuration tests without a display.
+The first command runs 32 backend/configuration/diagnostic tests without a display.
 The second opens real windows and runs three GUI scenarios; it needs a display.
 All tests use temporary databases. HTTP responses are mocked; tests never need
 credentials or make paid requests. See [validation results](docs/VALIDATION.md).
@@ -133,6 +133,7 @@ Manual Windows checks before presenting:
 | --- | --- |
 | `main.py` | Connect the services, start the window, and handle startup errors |
 | `config.py` | Load and validate `.env`; define the project path and message limit |
+| `check_online.py` | Check Gemini connectivity and available models without generating a chat reply |
 | `ui/main_window.py` | Coordinate events, worker threads, retries, and queue polling |
 | `ui/chat_panel.py` | Render bubbles, timestamps, input, mode, and status |
 | `ui/sidebar.py` | Render chat navigation and new/delete controls |
@@ -152,6 +153,20 @@ Start with the [learning guide](docs/LEARNING_GUIDE.md), then rehearse the
 [five-person presentation](docs/PRESENTATION.md). Source files are authoritative.
 
 ## Troubleshooting
+
+For a Gemini timeout or model-access problem, close the desktop app and run this
+from the project folder in PowerShell:
+
+```powershell
+.\.venv\Scripts\python.exe .\check_online.py
+```
+
+This reads your existing `.env`, uses verified HTTPS and the same bearer
+authentication as the app, and requests only Gemini's model list. It reports
+connection/read timeouts, access errors, and model availability without printing
+your key or raw response bodies. It never sends a chat-generation request.
+A successful model listing does not establish chat quota or a successful answer.
+Model names should come from the models available to your Google project.
 
 | Symptom | What to do |
 | --- | --- |
